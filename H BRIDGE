@@ -226,3 +226,20 @@ void loop() {
     }
   }
 }
+
+
+
+การตั้งค่าในแอป MQTT Tiles
+สมมติว่าคุณตั้ง mqtt_topic_prefix = "myproject_1234" ในโค้ด หัวข้อ (Topic) ที่คุณต้องใส่ในแอปจะเป็นดังนี้:
+
+ปุ่มซ้าย: Topic: myproject_1234/motor/control | Payload: left
+
+ปุ่มขวา: Topic: myproject_1234/motor/control | Payload: right
+
+ปุ่มหยุด: Topic: myproject_1234/motor/control | Payload: stop
+
+ปุ่ม LED (กลับด้าน): Topic: myproject_1234/led/control | Payload: on
+
+ดูสถานะมอเตอร์: Topic: myproject_1234/motor/status
+
+ดูสถานะ LED: Topic: myproject_1234/led/status
