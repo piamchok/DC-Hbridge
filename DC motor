@@ -1,206 +1,137 @@
 #include <WiFi.h>
-#include <PubSubClient.h>
+#include <MQTT.h>
 
-// --- 1. ตั้งค่า WiFi และ MQTT ---
-const char* ssid = "YOUR_WIFI_SSID";
-const char* password = "YOUR_WIFI_PASSWORD";
-const char* mqtt_server = "broker.hivemq.com";
-String mqtt_topic_prefix = "myproject_LDR"; // ตั้งชื่อให้ไม่ซ้ำ
+// --- Config ---
+const char ssid[] = "YOUR_WIFI_SSID";
+const char pass[] = "YOUR_WIFI_PASS";
 
-// --- 2. กำหนดขา Pin ---
-const int LDR_PIN = 34;    // ขา Analog สำหรับอ่านค่าแสง
-const int MOTOR_PIN = 26;  // ขาคุม Transistor
-const int LED1_PIN = 18;   // LED แสดงสถานะทำงาน
-const int LED2_PIN = 19;   // LED แสดงสถานะหยุด
+const char mqtt_broker[] = "broker.hivemq.com";
+const char mqtt_client_id[] = "esp32_ldr_client_002"; // เปลี่ยนเลขอย่าให้ซ้ำ
+String topic_prefix = "my_project_user1"; // <-- เปลี่ยนเป็นชื่อคุณ
 
-// --- 3. ตัวแปรระบบ ---
-WiFiClient espClient;
-PubSubClient client(espClient);
+// --- Pins ---
+const int LDR_PIN = 34;   // Analog Input
+const int MOTOR_PIN = 26; // ต่อ Transistor หรือ IN1
+const int LED1_PIN = 18;  // ทำงาน
+const int LED2_PIN = 19;  // หยุด
 
+// --- Variables ---
+WiFiClient net;
+MQTTClient client;
+unsigned long lastMillis = 0;
+
+bool isEmergency = false;
+bool isReset = false;
 int ldrValue = 0;
-bool isEmergency = false;  // สถานะฉุกเฉิน
-bool isReset = true;       // สถานะเริ่มต้น (Reset state)
 
-unsigned long lastMsg = 0; // สำหรับหน่วงเวลาส่ง MQTT
-
-// --- Topics ---
-String topic_ldr;
-String topic_motor_status;
-String topic_led1_status;
-String topic_led2_status;
-String topic_emergency_btn;
-String topic_reset_btn;
-
-// --- ฟังก์ชันควบคุม Hardware ---
+// --- Helper Functions ---
 void setMotor(bool state) {
   digitalWrite(MOTOR_PIN, state ? HIGH : LOW);
-  client.publish(topic_motor_status.c_str(), state ? "หมุน" : "หยุด");
+  client.publish(topic_prefix + "/motor/status", state ? "Running" : "Stopped");
 }
 
 void setLeds(bool led1, bool led2) {
   digitalWrite(LED1_PIN, led1 ? HIGH : LOW);
   digitalWrite(LED2_PIN, led2 ? HIGH : LOW);
-  client.publish(topic_led1_status.c_str(), led1 ? "ON" : "OFF");
-  client.publish(topic_led2_status.c_str(), led2 ? "ON" : "OFF");
+  client.publish(topic_prefix + "/led1/status", led1 ? "ON" : "OFF");
+  client.publish(topic_prefix + "/led2/status", led2 ? "ON" : "OFF");
 }
 
-// --- Callback MQTT ---
-void callback(char* topic, byte* payload, unsigned int length) {
-  String message;
-  for (int i = 0; i < length; i++) message += (char)payload[i];
-  String strTopic = String(topic);
-
-  Serial.print("MQTT: "); Serial.println(message);
-
-  // 1. ปุ่ม Emergency Stop (Toggle Logic)
-  if (strTopic == topic_emergency_btn) {
-    if (message == "PRESS") {
-      isEmergency = !isEmergency; // สลับสถานะ (True/False)
-      isReset = false; // หลุดจากโหมด Reset เพื่อเริ่มทำงาน
-
-      if (isEmergency) {
-        // หยุดทำงานทันที
-        setMotor(false);
-        // โจทย์ไม่ได้บอกว่า Emergency ให้ LED เป็นไง แต่ปกติควรหยุดหรือกระพริบ
-        // ในที่นี้ให้คงสถานะล่าสุด หรือสั่งดับตามเงื่อนไขหยุด
-      }
-    }
-  }
-
-  // 2. ปุ่ม Reset
-  if (strTopic == topic_reset_btn) {
-    if (message == "PRESS") {
-      Serial.println("System Reset!");
-      isReset = true;
-      isEmergency = false;
-      // กลับสู่สถานะเริ่มต้น: มอเตอร์หยุด, LED ดับทุกดวง
-      setMotor(false);
-      setLeds(false, false); 
-    }
-  }
-}
-
-void setup_wifi() {
-  delay(10);
-  WiFi.begin(ssid, password);
+void connect() {
+  Serial.print("Checking WiFi...");
   while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
+    Serial.print("."); delay(1000);
   }
+
+  Serial.print("\nMQTT Connecting...");
+  while (!client.connect(mqtt_client_id)) {
+    Serial.print("."); delay(1000);
+  }
+  Serial.println("\nMQTT Connected!");
+
+  client.subscribe(topic_prefix + "/emergency"); // payload: press
+  client.subscribe(topic_prefix + "/reset");     // payload: press
 }
 
-void reconnect() {
-  while (!client.connected()) {
-    String clientId = "ESP32-LDR-" + String(random(0xffff), HEX);
-    if (client.connect(clientId.c_str())) {
-      client.subscribe(topic_emergency_btn.c_str());
-      client.subscribe(topic_reset_btn.c_str());
-    } else {
-      delay(5000);
+// --- Callback ---
+void messageReceived(String &topic, String &payload) {
+  Serial.println("Incoming: " + topic + " - " + payload);
+
+  // 1. Emergency Stop
+  if (topic.endsWith("/emergency") && payload == "press") {
+    isEmergency = !isEmergency; // สลับสถานะ (Toggle)
+    isReset = false; // หลุดจาก Reset state
+    Serial.println(isEmergency ? "EMERGENCY MODE!" : "Emergency Cleared");
+    
+    if (isEmergency) {
+      setMotor(false); 
+      setLeds(false, true); // หยุดทำงาน
     }
+  }
+
+  // 2. Reset System
+  if (topic.endsWith("/reset") && payload == "press") {
+    Serial.println("SYSTEM RESET");
+    isReset = true;
+    isEmergency = false;
+    setMotor(false);
+    setLeds(false, false); // ดับหมด
   }
 }
 
 void setup() {
   Serial.begin(115200);
 
-  // Define Topics
-  topic_ldr = mqtt_topic_prefix + "/ldr";
-  topic_motor_status = mqtt_topic_prefix + "/motor";
-  topic_led1_status = mqtt_topic_prefix + "/led1";
-  topic_led2_status = mqtt_topic_prefix + "/led2";
-  topic_emergency_btn = mqtt_topic_prefix + "/emergency";
-  topic_reset_btn = mqtt_topic_prefix + "/reset";
-
   pinMode(MOTOR_PIN, OUTPUT);
   pinMode(LED1_PIN, OUTPUT);
   pinMode(LED2_PIN, OUTPUT);
   pinMode(LDR_PIN, INPUT);
 
-  setup_wifi();
-  client.setServer(mqtt_server, 1883);
-  client.setCallback(callback);
+  // เริ่มต้นปิดหมด
+  digitalWrite(MOTOR_PIN, LOW);
+  digitalWrite(LED1_PIN, LOW);
+  digitalWrite(LED2_PIN, LOW);
 
-  // เริ่มต้น: มอเตอร์หยุดหมุน และ LED ดับทุกดวง (ตามโจทย์ข้อ 4.1)
-  setMotor(false);
-  setLeds(false, false);
+  WiFi.begin(ssid, pass);
+  client.begin(mqtt_broker, 1883, net);
+  client.onMessage(messageReceived);
+
+  connect();
 }
 
 void loop() {
-  if (!client.connected()) reconnect();
   client.loop();
+  delay(10);
 
-  // อ่านค่า LDR ทุกๆ 1 วินาที (เพื่อไม่ให้ส่ง MQTT ถี่เกินไป)
-  unsigned long now = millis();
-  if (now - lastMsg > 1000) {
-    lastMsg = now;
+  if (!client.connected()) connect();
+
+  // ทำงานทุกๆ 1 วินาที (อ่านค่า LDR)
+  if (millis() - lastMillis > 1000) {
+    lastMillis = millis();
     
     ldrValue = analogRead(LDR_PIN);
-    Serial.print("LDR Value: "); Serial.println(ldrValue);
-    client.publish(topic_ldr.c_str(), String(ldrValue).c_str());
+    Serial.print("LDR: "); Serial.println(ldrValue);
+    client.publish(topic_prefix + "/ldr", String(ldrValue));
 
-    // --- MAIN LOGIC ---
-    
-    // ถ้าอยู่ในโหมด Reset: ไม่ทำอะไร (รอจนกว่าจะมีการกดปุ่มอื่น หรืออนุญาตให้ทำงาน)
-    // แต่โจทย์บอกว่า Reset ให้ดับหมด แล้วอนุญาตให้ทำงานตาม LDR ต่อได้เลยไหม?
-    // ข้อ 5.5 บอกว่า "อนุญาตให้ทำงานตามเงื่อนไข LDR" ดังนั้น isReset เป็นแค่การเคลียร์ค่าชั่วคราว
+    // Logic การทำงาน
     if (isReset) {
-        isReset = false; // ปลดล็อกทันทีเพื่อให้ทำงานรอบถัดไปได้
+       // ถ้า Reset อยู่ ให้เคลียร์ค่าแล้วเริ่มวัดแสงรอบถัดไปได้เลย (Auto-arm)
+       isReset = false; 
     }
-
-    // ถ้าไม่ Emergency -> ทำงานตามแสง
-    if (!isEmergency) {
-      if (ldrValue < 300) {
-        // แสงน้อย: มอเตอร์ทำงาน, LED1 ติด, LED2 ดับ (ข้อ 4.2, 4.3)
-        setMotor(true);
-        setLeds(true, false);
-      } else {
-        // แสงมาก: มอเตอร์หยุด, LED1 ดับ, LED2 ติด (ข้อ 4.4)
-        setMotor(false);
-        setLeds(false, true);
-      }
-    } 
+    else if (isEmergency) {
+       // ถ้า Emergency ต้องหยุดเสมอ
+       setMotor(false);
+       setLeds(false, true); 
+    }
     else {
-      // ถ้า Emergency: มอเตอร์ต้องหยุด (ข้อ 5.4)
-      setMotor(false);
-      // โจทย์ไม่ได้ระบุ LED ชัดเจนในโหมดนี้ แต่เพื่อให้รู้ว่าหยุด ให้ LED2 ติดเหมือนสถานะหยุดปกติได้
-      // หรือจะสั่งดับหมดก็ได้ตามดีไซน์ (ในที่นี้ขอสั่งตามสถานะหยุดปกติ)
-      setLeds(false, true);
+       // ทำงานปกติ ตามแสง
+       if (ldrValue < 300) { // มืด
+         setMotor(true);
+         setLeds(true, false); // LED1 ติด
+       } else { // สว่าง
+         setMotor(false);
+         setLeds(false, true); // LED2 ติด
+       }
     }
   }
 }
-
-
-4. การตั้งค่า MQTT Dashboard (MQTT Tiles)
-ต้องสร้าง Tiles ทั้งหมด 5-6 อันดังนี้ครับ:
-
-LDR Value (Text):
-
-Topic: myproject_LDR/ldr
-
-Motor Status (Text):
-
-Topic: myproject_LDR/motor
-
-LED1 Status (Text):
-
-Topic: myproject_LDR/led1
-
-LED2 Status (Text):
-
-Topic: myproject_LDR/led2
-
-Emergency Button (Button - Push):
-
-Label: Emergency Stop
-
-Topic: myproject_LDR/emergency
-
-Payload: PRESS
-
-Reset Button (Button - Push):
-
-Label: Reset System
-
-Topic: myproject_LDR/reset
-
-Payload: PRESS
