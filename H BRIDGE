@@ -1,0 +1,228 @@
+/*
+ * โปรเจกต์: ควบคุม DC Motor ด้วย ESP32 และ MQTT (HiveMQ)
+ * ฮาร์ดแวร์:
+ * - ESP32 Board
+ * - L298N Motor Driver
+ * - DC Motor
+ * - LED
+ * - ปุ่มกดใช้ปุ่ม BOOT บนบอร์ด (GPIO 0)
+ *
+ * การทำงาน:
+ * 1. ปุ่มกดบนบอร์ด: กดวนลูป หยุด -> หมุนซ้าย -> หมุนขวา -> หยุด
+ * 2. MQTT: สั่งงานผ่านแอปได้ (ซ้าย, ขวา, หยุด)
+ * 3. เงื่อนไขพิเศษ: สั่งเปิด LED ผ่าน MQTT -> มอเตอร์กลับทิศทางทันที
+ */
+
+#include <WiFi.h>
+#include <PubSubClient.h>
+
+// ==========================================
+// 1. ส่วนที่ต้องแก้ไข (User Config)
+// ==========================================
+const char* ssid = "ใส่ชื่อ_WIFI_ของคุณ";          // <-- แก้ไขชื่อ WiFi
+const char* password = "ใส่รหัส_WIFI_ของคุณ";      // <-- แก้ไขรหัส WiFi
+const char* mqtt_server = "broker.hivemq.com"; 
+
+// ตั้งชื่อ Project ให้ไม่ซ้ำกับคนอื่น (ภาษาอังกฤษ)
+// เช่น "project_somchai_99"
+String mqtt_topic_prefix = "CHANGE_THIS_TO_YOUR_NAME"; // <-- แก้ไขชื่อ Topic
+
+// ==========================================
+// 2. กำหนดขา Pin (Wiring)
+// ==========================================
+const int IN1 = 26;       // ต่อ Motor Driver IN1
+const int IN2 = 27;       // ต่อ Motor Driver IN2
+const int BTN_PIN = 0;    // ใช้ปุ่ม BOOT บนบอร์ด ESP32
+const int LED_PIN = 22;   // ต่อ LED (อย่าลืมตัวต้านทาน)
+
+// ==========================================
+// 3. ตัวแปรระบบ
+// ==========================================
+WiFiClient espClient;
+PubSubClient client(espClient);
+
+String motorState = "STOP";       
+String lastRunDirection = "LEFT"; // จำทิศทางล่าสุด (ค่าเริ่มต้น: ซ้าย)
+
+// ตัวแปรสำหรับ Debounce ปุ่มกด
+int lastButtonState = HIGH;
+unsigned long lastDebounceTime = 0;
+unsigned long debounceDelay = 50;
+
+// ตัวแปรเก็บชื่อ Topic เต็มๆ
+String topic_motor_control;
+String topic_led_control;
+String topic_motor_status;
+String topic_led_status;
+
+// ==========================================
+// 4. ฟังก์ชันควบคุมมอเตอร์
+// ==========================================
+void controlMotor(String direction) {
+  if (direction == "LEFT") {
+    digitalWrite(IN1, HIGH);
+    digitalWrite(IN2, LOW);
+    motorState = "LEFT";
+    lastRunDirection = "LEFT"; 
+    client.publish(topic_motor_status.c_str(), "LEFT");
+    Serial.println("Motor: LEFT");
+  } 
+  else if (direction == "RIGHT") {
+    digitalWrite(IN1, LOW);
+    digitalWrite(IN2, HIGH);
+    motorState = "RIGHT";
+    lastRunDirection = "RIGHT"; 
+    client.publish(topic_motor_status.c_str(), "RIGHT");
+    Serial.println("Motor: RIGHT");
+  } 
+  else { // STOP
+    digitalWrite(IN1, LOW);
+    digitalWrite(IN2, LOW);
+    motorState = "STOP";
+    client.publish(topic_motor_status.c_str(), "STOP");
+    Serial.println("Motor: STOP");
+  }
+}
+
+// ==========================================
+// 5. Callback เมื่อได้รับข้อความจาก MQTT
+// ==========================================
+void callback(char* topic, byte* payload, unsigned int length) {
+  String message;
+  for (int i = 0; i < length; i++) message += (char)payload[i];
+  String strTopic = String(topic);
+
+  Serial.print("MQTT Received: "); Serial.print(strTopic); Serial.print(" -> "); Serial.println(message);
+
+  // --- กรณีสั่ง Motor ผ่าน MQTT ---
+  if (strTopic == topic_motor_control) {
+    if (message == "left") controlMotor("LEFT");
+    else if (message == "right") controlMotor("RIGHT");
+    else if (message == "stop") controlMotor("STOP");
+  }
+  
+  // --- กรณีสั่ง LED ผ่าน MQTT (Special Logic) ---
+  if (strTopic == topic_led_control) {
+    if (message == "on") {
+      // โจทย์: ถ้ากดปุ่มติด ให้มอเตอร์หมุนไปอีกด้านของด้านก่อนหน้า
+      Serial.println("Command: LED ON -> Reversing Motor");
+      if (lastRunDirection == "LEFT") {
+        controlMotor("RIGHT");
+      } else {
+        controlMotor("LEFT");
+      }
+    }
+  }
+}
+
+// ==========================================
+// 6. Setup WiFi & MQTT
+// ==========================================
+void setup_wifi() {
+  delay(10);
+  Serial.println();
+  Serial.print("Connecting to WiFi: ");
+  Serial.println(ssid);
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("\nWiFi Connected!");
+}
+
+void reconnect() {
+  while (!client.connected()) {
+    Serial.print("Attempting MQTT connection...");
+    // สร้าง Client ID สุ่ม
+    String clientId = "ESP32-" + String(random(0xffff), HEX);
+    
+    if (client.connect(clientId.c_str())) {
+      Serial.println("connected");
+      // Subscribe topic ที่เราสร้าง
+      client.subscribe(topic_motor_control.c_str());
+      client.subscribe(topic_led_control.c_str());
+    } else {
+      Serial.print("failed, rc=");
+      Serial.print(client.state());
+      delay(5000);
+    }
+  }
+}
+
+// ==========================================
+// 7. Main Setup
+// ==========================================
+void setup() {
+  Serial.begin(115200);
+
+  // สร้างชื่อ Topic เต็ม
+  topic_motor_control = mqtt_topic_prefix + "/motor/control";
+  topic_led_control   = mqtt_topic_prefix + "/led/control";
+  topic_motor_status  = mqtt_topic_prefix + "/motor/status";
+  topic_led_status    = mqtt_topic_prefix + "/led/status";
+
+  pinMode(IN1, OUTPUT);
+  pinMode(IN2, OUTPUT);
+  pinMode(LED_PIN, OUTPUT);
+  pinMode(BTN_PIN, INPUT_PULLUP); // ใช้ Pull-up ภายใน
+
+  controlMotor("STOP"); // เริ่มต้นให้หยุด
+
+  setup_wifi();
+  client.setServer(mqtt_server, 1883);
+  client.setCallback(callback);
+}
+
+// ==========================================
+// 8. Main Loop
+// ==========================================
+void loop() {
+  if (!client.connected()) reconnect();
+  client.loop();
+
+  // --- 1. อ่านค่าปุ่มกด (Single Button Logic) ---
+  int reading = digitalRead(BTN_PIN);
+  if (reading != lastButtonState) {
+    lastDebounceTime = millis();
+  }
+
+  if ((millis() - lastDebounceTime) > debounceDelay) {
+    static int currentButtonState = HIGH;
+    if (reading != currentButtonState) {
+      currentButtonState = reading;
+      
+      // ตรวจจับตอนกดลง (Active LOW)
+      if (currentButtonState == LOW) {
+        Serial.println("Button Pressed!");
+        // Logic วนลูป: STOP -> LEFT -> RIGHT -> STOP
+        if (motorState == "STOP") {
+             controlMotor("LEFT");
+        } else if (motorState == "LEFT") {
+             controlMotor("RIGHT");
+        } else if (motorState == "RIGHT") {
+             controlMotor("STOP");
+        }
+      }
+    }
+  }
+  lastButtonState = reading;
+
+  // --- 2. ควบคุม LED ตามสถานะมอเตอร์ ---
+  // ใช้ static variable เพื่อส่ง MQTT แค่ตอนสถานะเปลี่ยน (ลด Traffic)
+  static String lastLedState = "";
+  
+  if (motorState != "STOP") {
+    digitalWrite(LED_PIN, HIGH);
+    if (lastLedState != "ON") {
+      client.publish(topic_led_status.c_str(), "ON");
+      lastLedState = "ON";
+    }
+  } else {
+    digitalWrite(LED_PIN, LOW);
+    if (lastLedState != "OFF") {
+      client.publish(topic_led_status.c_str(), "OFF");
+      lastLedState = "OFF";
+    }
+  }
+}
