@@ -147,3 +147,56 @@ void loop() {
     }
   }
 }
+
+
+Tile 1: สั่งหมุนซ้าย (Button) Type: Button (Publish)
+
+Topic: my_project_user1/motor/control
+
+Payload: left
+
+Label: หมุนซ้าย
+
+Icon: (รูปลูกศรซ้าย)
+
+Tile 2: สั่งหมุนขวา (Button) Type: Button (Publish)
+
+Topic: my_project_user1/motor/control
+
+Payload: right
+
+Label: หมุนขวา
+
+Icon: (รูปลูกศรขวา)
+
+Tile 3: สั่งหยุด (Button) Type: Button (Publish)
+
+Topic: my_project_user1/motor/control
+
+Payload: stop
+
+Label: หยุด
+
+Icon: (รูปสี่เหลี่ยมหยุด)
+
+Tile 4: สั่ง LED ติด (เพื่อกลับทางหมุน) (Button) Type: Button (Publish)
+
+Topic: my_project_user1/led/control
+
+Payload: on
+
+Label: LED ON (กลับทาง)
+
+Icon: (รูปหลอดไฟ)
+
+Tile 5: แสดงสถานะมอเตอร์ (Text) Type: Text (Subscribe)
+
+Topic: my_project_user1/motor/status
+
+Label: สถานะ Motor
+
+Tile 6: แสดงสถานะ LED (Text) Type: Text (Subscribe)
+
+Topic: my_project_user1/led/status
+
+Label: สถานะไฟ
