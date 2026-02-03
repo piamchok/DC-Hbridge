@@ -157,3 +157,43 @@ void loop() {
     }
   }
 }
+
+1. โจทย์มอเตอร์ (Stepper Motor + องศา)
+สำหรับปุ่มกด (Publish จากแอปไปหาบอร์ด):
+
+สั่งหมุน/หยุด: my_project_user1/motor/control
+
+ส่งค่า: left, right, stop
+
+สั่งไฟ LED (กลับทาง): my_project_user1/led/control
+
+ส่งค่า: on
+
+สำหรับแสดงผล (Subscribe รับค่าจากบอร์ด):
+
+สถานะมอเตอร์: my_project_user1/motor/status
+
+ค่าองศา: my_project_user1/motor/degree
+
+สถานะ LED: my_project_user1/led/status
+
+2. โจทย์ LDR (อัตโนมัติ + Emergency)
+สำหรับปุ่มกด (Publish จากแอปไปหาบอร์ด):
+
+ปุ่มฉุกเฉิน (Emergency): my_project_user1/emergency
+
+ส่งค่า: press
+
+ปุ่มรีเซ็ต (Reset): my_project_user1/reset
+
+ส่งค่า: press
+
+สำหรับแสดงผล (Subscribe รับค่าจากบอร์ด):
+
+ค่าแสง (LDR): my_project_user1/ldr
+
+สถานะมอเตอร์: my_project_user1/motor/status
+
+สถานะ LED 1 (ทำงาน): my_project_user1/led1/status
+
+สถานะ LED 2 (หยุด): my_project_user1/led2/status
